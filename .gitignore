@@ -1,0 +1,5 @@
+*.class
+*.hprof
+*.index
+*.threads
+*_Leak_Suspects.zip
