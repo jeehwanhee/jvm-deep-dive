@@ -5,10 +5,16 @@ import java.lang.management.MemoryType;
 
 /**
  * 출처: 직접 작성한 실습 (3.3 신세대 에덴:생존자 = 8:1:1, 표시-복사 알고리즘)
- * VM 매개 변수: -XX:+UseSerialGC -Xms20m -Xmx20m -Xmn10m -XX:SurvivorRatio=8 -Xlog:gc*
+ * VM 매개 변수: -XX:+UseSerialGC -Xms20m -Xmx20m -Xmn10m -XX:SurvivorRatio=8 -Xlog:gc
  *
  * javac GenerationTest.java
- * java -XX:+UseSerialGC -Xms20m -Xmx20m -Xmn10m -XX:SurvivorRatio=8 -Xlog:gc* GenerationTest
+ * java -XX:+UseSerialGC -Xms20m -Xmx20m -Xmn10m -XX:SurvivorRatio=8 -Xlog:gc GenerationTest
+ *
+ * -Xlog:gc* 대신 -Xlog:gc를 쓰면 GC 한 번마다 요약 한 줄만 찍힌다.
+ * (예: "GC(0) Pause Young (Allocation Failure) 9M->2M(19M) 2.010ms")
+ * -Xlog:gc*는 "gc로 시작하는 모든 하위 태그"를 전부 켜는 옵션이라
+ * Full GC의 단계별 분해(Phase 1~4), Eden/From/To 영역별 상세, 메타스페이스, CPU 사용량 같은
+ * 세부 로그까지 다 쏟아져서 줄 수가 훨씬 많아진다. 세부 로그가 보고 싶을 때만 -Xlog:gc*로 바꿔서 실행하자.
  *
  * ================= 이 실습이 보여주는 것 =================
  * - 힙은 "에덴(Eden)", "생존자(Survivor) 0/1", "구세대(Tenured/Old)" 영역으로 나뉜다.

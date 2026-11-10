@@ -79,8 +79,13 @@ public class GcCompare {
     // ========== 구동 쪽: 컬렉터마다 자식 JVM을 띄워서 결과를 모아 표로 출력 ==========
 
     private static void driver() throws Exception {
+        // System.getProperty("java.class.path") : 지금 이 프로그램을 실행할 때 쓴 클래스패스(-cp 값)를
+        // 그대로 문자열로 돌려준다. 자식 JVM도 같은 클래스(GcCompare)를 찾아 실행해야 하므로,
+        // 이 값을 그대로 자식에게 "-cp" 옵션으로 넘겨줄 것이다.
         String classPath = System.getProperty("java.class.path");
 
+        // System.getProperty("java.version") : 현재 실행 중인 JDK의 버전 문자열(예: "25.0.5")을 반환한다.
+        // Runtime.getRuntime().availableProcessors() : 이 컴퓨터에서 JVM이 쓸 수 있는 CPU 코어 수를 반환한다.
         System.out.println("JDK: " + System.getProperty("java.version")
                 + " / 프로세서: " + Runtime.getRuntime().availableProcessors() + "개"
                 + " / 힙: 512MB 고정 / 측정 요청 수: " + MEASURE_OPS);
@@ -113,25 +118,42 @@ public class GcCompare {
 
         System.out.println();
         System.out.println("읽는 법: 처리량은 클수록, 지연(평균·p99·p99.9·최대)은 작을수록 좋습니다.");
-        System.out.println("이 수치는 이 컴퓨터와 이 JDK에서 한 번 측정한 값이라, 실행할 때마다 달라질 수 있습니다.");
     }
 
     // 자식 JVM을 실행해서 "RESULT,..." 로 시작하는 줄을 찾아 반환한다. 실패하면 null을 반환한다.
+    //
+    // 여기서 쓰는 java.lang.ProcessBuilder / java.lang.Process는 "다른 프로그램을 실행시키는" API다.
+    // 터미널에서 `java ... GcCompare worker` 명령을 직접 치는 것과 같은 일을, 코드로 대신 해주는 것이라고
+    // 생각하면 된다. 이 메서드가 끝나면 자식 JVM 하나가 뜨고, 측정을 마치고, 종료된다.
     private static String runWorkerAndGetResult(String[] command) throws Exception {
+        // ProcessBuilder(command) : command 배열(["java", "-XX:...", ..., "worker"])을
+        // 터미널에 입력할 명령어처럼 그대로 받아서, 실행을 "준비"만 해두는 객체.
         ProcessBuilder processBuilder = new ProcessBuilder(command);
-        processBuilder.redirectError(ProcessBuilder.Redirect.DISCARD); // 자식 JVM의 에러 출력은 무시
+
+        // 자식 JVM이 표준에러(System.err)로 뭔가를 찍더라도 화면에 보여주지 않고 그냥 버린다.
+        // (Redirect.DISCARD = "어디로도 보내지 말고 버려라"는 뜻의 미리 정의된 값)
+        processBuilder.redirectError(ProcessBuilder.Redirect.DISCARD);
+
+        // start() : 이제 실제로 자식 프로세스(JVM)를 하나 띄운다. 돌아오는 Process 객체로
+        // 그 자식 프로세스의 출력을 읽거나, 종료를 기다리거나, 강제로 죽일 수 있다.
         Process process = processBuilder.start();
 
         String resultLine = null;
+        // process.getInputStream() : 자식 프로세스가 println으로 찍은 "표준출력" 내용을 읽는 통로.
+        // new Scanner(...) : 그 통로를 한 줄씩(hasNextLine/nextLine) 쉽게 읽게 도와주는 보조 도구.
+        // (Scanner(System.in)으로 콘솔 입력을 받던 것과 같은 클래스이고, 대상만 "자식 프로세스의 출력"으로 바뀐 것)
         try (Scanner workerOutput = new Scanner(process.getInputStream())) {
             while (workerOutput.hasNextLine()) {
                 String line = workerOutput.nextLine();
+                // 자식(worker)이 여러 줄을 찍을 수도 있으니, "RESULT,"로 시작하는 줄만 기억해둔다.
                 if (line.startsWith("RESULT,")) {
                     resultLine = line;
                 }
             }
         }
 
+        // waitFor() : 자식 프로세스가 완전히 끝날 때까지 여기서 기다렸다가, 그 종료 코드를 돌려준다.
+        // 정상 종료라면 0, 뭔가 잘못됐으면 보통 0이 아닌 값이다.
         int exitCode = process.waitFor();
         if (exitCode != 0) {
             return null;
@@ -145,6 +167,10 @@ public class GcCompare {
     private static final int[] COLUMN_WIDTHS = {12, 11, 14, 9, 9, 11, 10, 8};
 
     // 첫 칸(컬렉터 이름)은 왼쪽 정렬, 나머지 숫자 칸은 오른쪽 정렬로 한 줄을 출력한다.
+    //
+    // 매개변수 타입이 "String... columns"인 건 가변 인자(varargs)라는 문법이다.
+    // printRow("a", "b")처럼 호출해도 되고 printRow("a","b","c",...)처럼 몇 개를 넘기든 다 받아주며,
+    // 메서드 안에서는 그냥 String[] columns 배열처럼 쓸 수 있다.
     private static void printRow(String... columns) {
         StringBuilder line = new StringBuilder();
         for (int i = 0; i < columns.length; i++) {
@@ -160,6 +186,11 @@ public class GcCompare {
 
     // 한글은 터미널에서 영문/숫자보다 2배 넓게 보인다. 그래서 "글자 수"가 아니라
     // "화면에 보이는 너비"로 패딩을 계산해야 헤더(한글)와 데이터(숫자/영문) 줄이 맞는다.
+    //
+    // text.toCharArray() : 문자열을 글자(char) 하나하나의 배열로 쪼갠다. char 하나는 유니코드
+    // 문자 하나를 숫자(코드)로 담고 있는데, 그 숫자 범위를 보면 "이게 한글인지 아닌지" 알 수 있다.
+    // 0xAC00, 0xD7A3 같은 건 16진수 숫자 표기일 뿐이고, 유니코드 표에서 "한글 음절(가~힣)"이
+    // 모여 있는 범위를 뜻한다(0x3130~0x318F는 "ㄱ", "ㅏ"처럼 자음/모음만 있는 한글 범위).
     private static int visibleWidth(String text) {
         int width = 0;
         for (char ch : text.toCharArray()) {
@@ -170,6 +201,9 @@ public class GcCompare {
         return width;
     }
 
+    // StringBuilder : 문자열을 "+"로 계속 이어 붙이면 그때마다 새 문자열이 만들어져 느려질 수 있는데,
+    // StringBuilder는 내부에 늘어나는 버퍼를 하나 두고 거기에 이어 붙이기만 해서 더 효율적이다.
+    // 다 이어 붙인 뒤 toString()으로 최종 String을 꺼낸다.
     private static String padRight(String text, int width) {
         StringBuilder sb = new StringBuilder(text);
         while (visibleWidth(sb.toString()) < width) {
@@ -250,6 +284,10 @@ public class GcCompare {
             sumNanos += latency;
         }
 
+        // GarbageCollectorMXBean : JVM 내부의 "GC 담당자"를 자바 코드에서 들여다볼 수 있게 해주는 객체.
+        // ManagementFactory.getGarbageCollectorMXBeans()는 지금 이 JVM에서 실제로 동작 중인
+        // GC 담당자 목록을 돌려준다(보통 "젊은 세대 담당"과 "구세대/전체 담당"이 각각 하나씩 있다).
+        // getCollectionCount()는 그 담당자가 지금까지 GC를 몇 번 실행했는지를 알려준다.
         long gcCount = 0;
         for (GarbageCollectorMXBean gcBean : ManagementFactory.getGarbageCollectorMXBeans()) {
             gcCount += gcBean.getCollectionCount();
@@ -258,9 +296,14 @@ public class GcCompare {
         long totalMs = totalMeasureNanos / NANOS_PER_MILLI;
         long opsPerSec = MEASURE_OPS * NANOS_PER_SECOND / totalMeasureNanos;
         long avgUs = sumNanos / MEASURE_OPS / NANOS_PER_MICRO;
+
+        // latencies는 이미 Arrays.sort()로 "가장 빠른 것 -> 가장 느린 것" 순으로 정렬돼 있다.
+        // 그러니 "앞에서부터 99%번째 자리"에 있는 값이 곧 p99 값이다.
+        // (int)는 "소수점 있는 계산 결과를 배열 인덱스로 쓰려면 정수로 바꿔야 한다"는 형변환이다.
+        // 예: MEASURE_OPS가 백만이면 0.99를 곱한 99만 번째(인덱스) 값을 꺼내는 것.
         long p99Us = latencies[(int) (MEASURE_OPS * 0.99)] / NANOS_PER_MICRO;
         long p999Us = latencies[(int) (MEASURE_OPS * 0.999)] / NANOS_PER_MICRO;
-        long maxUs = latencies[MEASURE_OPS - 1] / NANOS_PER_MICRO;
+        long maxUs = latencies[MEASURE_OPS - 1] / NANOS_PER_MICRO; // 정렬했으니 맨 마지막 칸이 가장 큰 값(= 최댓값)
 
         // sink 값을 실제로 "사용"하는 척해서, JIT 컴파일러가 "아무도 안 쓰는 값이니 할당 자체를 지워버리자"고
         // 최적화하는 것을 막는다. sink가 정확히 42가 될 일은 거의 없으므로 이 줄은 거의 실행되지 않는다.
